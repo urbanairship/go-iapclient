@@ -48,9 +48,10 @@ type ClaimSet struct {
 type IAP struct {
 	ClientID    string
 	SignerEmail string
-	Jwt         ClaimSet
+	Jwt         *ClaimSet
 	SignedJwt   string
 	OIDC        string
+	Transport   *http.Transport
 }
 
 // NewIAP creates a new IAP object to fetch and refresh IAP authentication
@@ -63,8 +64,9 @@ func NewIAP(clientID string) (*IAP, error) {
 
 	iap := IAP{
 		ClientID:    clientID,
-		Jwt:         ClaimSet{},
+		Jwt:         &ClaimSet{},
 		SignerEmail: signerEmail,
+		Transport:   &http.Transport{},
 	}
 	return &iap, nil
 }
@@ -123,8 +125,6 @@ func (iap *IAP) refreshOIDC(ctx context.Context) error {
 		return err
 	}
 
-	// this doesn't appear to be needed
-	//tokenReq.Header.Set("Authorization", fmt.Sprintf("Bearer %v", iap.Jwt))
 	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	tokenReq.Header.Set("Content-Length", strconv.Itoa(len(data.Encode())))
 
@@ -151,23 +151,42 @@ func (iap *IAP) refreshOIDC(ctx context.Context) error {
 	return nil
 }
 
-// Do wraps the passed in httpClient's Do method, but refreshes the auth if
-// necessary, and adds the authentication header for IAP auth
-func (iap *IAP) Do(ctx context.Context, httpClient doer, req *http.Request) (*http.Response, error) {
+func (iap *IAP) refresh(ctx context.Context) error {
 	if iap.Jwt.Exp-10 < time.Now().Unix() {
 		if err := iap.refreshJwt(ctx); err != nil {
 			log.Fatalf("Failed to get and sign JWT: %v", err)
-			return nil, err
+			return err
 		}
 
 		if err := iap.refreshOIDC(ctx); err != nil {
 			log.Fatalf("Failed to OIDC: %v", err)
-			return nil, err
+			return err
 		}
+	}
+	return nil
+}
+
+// Do wraps the passed in httpClient's Do method, but refreshes the auth if
+// necessary, and adds the authentication header for IAP auth
+func (iap *IAP) Do(httpClient doer, req *http.Request) (resp *http.Response, err error) {
+	if err := iap.refresh(req.Context()); err != nil {
+		return nil, err
 	}
 
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %v", iap.OIDC))
 
-	resp, err := httpClient.Do(req.WithContext(ctx))
+	resp, err = httpClient.Do(req)
+	return resp, err
+}
+
+// RoundTrip makes the IAP object into a valid http.Transport interface
+func (iap *IAP) RoundTrip(req *http.Request) (resp *http.Response, err error) {
+	if err := iap.refresh(req.Context()); err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %v", iap.OIDC))
+
+	resp, err = iap.Transport.RoundTrip(req)
 	return resp, err
 }
