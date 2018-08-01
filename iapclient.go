@@ -61,8 +61,10 @@ type IAP struct {
 	Jwt          *ClaimSet
 	SignedJwt    string
 	OIDC         string
-	Transport    *http.Transport
-	GoogleClient *http.Client
+	Transport    http.RoundTripper
+	GoogleClient interface {
+		Do(*http.Request) (*http.Response, error)
+	}
 }
 
 var refreshLock sync.Mutex
@@ -79,9 +81,12 @@ func NewIAP(clientID string) (*IAP, error) {
 	return &iap, nil
 }
 
+// refreshJwt generates a JWT containing all needed info, and uses the SignJwt
+// API to get a version signed by the service account in use. We do this
+// instead of signing it ourselves because a) we don't have the private key in
+// some cases (Application Default), and b) that requires a bunch more
+// libraries
 func (iap *IAP) refreshJwt(ctx context.Context) error {
-	signJwtName := fmt.Sprintf("projects/-/serviceAccounts/%v", iap.SignerEmail)
-
 	iap.Jwt.Exp = time.Now().Add(time.Hour).Unix()
 	iap.Jwt.Aud = oauthTokenURI
 	iap.Jwt.Iss = iap.SignerEmail
@@ -96,11 +101,12 @@ func (iap *IAP) refreshJwt(ctx context.Context) error {
 	var signJwtRequest iam.SignJwtRequest
 	signJwtRequest.Payload = string(claimSetJSON)
 
-	svc, err := iam.New(iap.GoogleClient)
+	svc, err := iam.New(iap.GoogleClient.(*http.Client))
 	if err != nil {
 		return errors.Wrap(err, "failed to get IAM client")
 	}
 
+	signJwtName := fmt.Sprintf("projects/-/serviceAccounts/%v", iap.SignerEmail)
 	ret, err := svc.Projects.ServiceAccounts.SignJwt(signJwtName, &signJwtRequest).Do()
 	if err != nil {
 		return errors.Wrap(err, "failed to get JWT signed by Google")
@@ -111,6 +117,9 @@ func (iap *IAP) refreshJwt(ctx context.Context) error {
 	return nil
 }
 
+// refreshOIDC is responsible for using our previously gotten JWT to talk to
+// the Google OAuth URI to get a OIDC bearer token. This token is the one
+// actually sent to the IAP-protected endpoint as auth
 func (iap *IAP) refreshOIDC(ctx context.Context) error {
 	data := url.Values{}
 	data.Set("assertion", iap.SignedJwt)
@@ -136,60 +145,83 @@ func (iap *IAP) refreshOIDC(ctx context.Context) error {
 
 	var body oAuthTokenBody
 	if err := json.Unmarshal(bodyJSON, &body); err != nil {
-		return errors.Wrap(err, "failed to unmarshal OAuth Token HTTP response body JSON")
+		return errors.Wrap(err, "OAuth token unmarshal failed")
 	}
 	iap.OIDC = body.IDToken
 	return nil
 }
 
+// getGoogleClient populates our Application Default authed http.Client, if
+// necessary
+func (iap *IAP) getGoogleClient(ctx context.Context) error {
+	if iap.GoogleClient == nil {
+		httpClient, err := google.DefaultClient(ctx, iamScope)
+		if err != nil {
+			return errors.Wrap(err, "google.DefaultClient failed")
+		}
+		iap.GoogleClient = httpClient
+	}
+	return nil
+}
+
+// getSignerEmail finds the service account's email address, either via the
+// Default Credentials JSON blob, or via the metadata service
+func (iap *IAP) getSignerEmail(ctx context.Context) error {
+	if iap.SignerEmail != "" {
+		return nil
+	}
+
+	credentials, err := google.FindDefaultCredentials(ctx)
+	if err != nil {
+		return errors.Wrap(err, "google.FindDefaultCredentials failed")
+	}
+
+	var credentialJSON CredentialJSON
+	if err := json.Unmarshal(credentials.JSON, &credentialJSON); err != nil {
+		return errors.Wrap(err, "failed to unmarshal Google Default Credential JSON")
+	}
+
+	if credentialJSON == (CredentialJSON{}) {
+		// Looks like we're in GCE - Use the metadata service
+		signerEmail, err := metadata.Get("instance/service-accounts/default/email")
+		if err != nil {
+			return errors.Wrap(err, "metadata get failed")
+		}
+		iap.SignerEmail = signerEmail
+	} else {
+		// We're local with JSON file
+		if credentialJSON.Type != "service_account" {
+			return fmt.Errorf("IAP auth only works with service_accounts, got %v", credentialJSON.Type)
+		}
+		iap.SignerEmail = credentialJSON.ClientEmail
+	}
+	return nil
+}
+
+// refresh is responsible for last-minute initialization, as well as auth
+// refreshing (if needed based on expiry)
 func (iap *IAP) refresh(ctx context.Context) error {
 	refreshLock.Lock()
 	defer refreshLock.Unlock()
 
-	if iap.GoogleClient == nil {
-		httpClient, err := google.DefaultClient(ctx, iamScope)
-		if err != nil {
-			return errors.Wrap(err, "failed to get Google Default Client")
-		}
-		iap.GoogleClient = httpClient
+	// Initialize
+	if err := iap.getGoogleClient(ctx); err != nil {
+		return errors.Wrap(err, "failed to get Google HTTP Client")
+	}
+	if err := iap.getSignerEmail(ctx); err != nil {
+		return errors.Wrap(err, "failed to get service account email")
 	}
 
-	if iap.SignerEmail == "" {
-		credentials, err := google.FindDefaultCredentials(ctx)
-		if err != nil {
-			return errors.Wrap(err, "failed to get Google Default Credentials")
-		}
-
-		var credentialJSON CredentialJSON
-		if err := json.Unmarshal(credentials.JSON, &credentialJSON); err != nil {
-			return errors.Wrap(err, "failed to unmarshal Google Default Credential JSON")
-		}
-
-		if credentialJSON == (CredentialJSON{}) {
-			// Looks like we're in GCE - Use the metadata service
-			signerEmail, err := metadata.Get("instance/service-accounts/default/email")
-			if err != nil {
-				return errors.Wrap(err, "failed to get service account email from metadata server")
-			}
-			iap.SignerEmail = signerEmail
-		} else {
-			// We're local with JSON file
-			if credentialJSON.Type != "service_account" {
-				return fmt.Errorf("iapclient: IAP auth only works with service_accounts, not %v", credentialJSON.Type)
-			}
-			iap.SignerEmail = credentialJSON.ClientEmail
-		}
-	}
-
+	// Refresh
 	if iap.Jwt.Exp-10 < time.Now().Unix() {
 		if err := iap.refreshJwt(ctx); err != nil {
 			return errors.Wrap(err, "failed to get and sign JWT")
 		}
-
 		if err := iap.refreshOIDC(ctx); err != nil {
 			return errors.Wrap(err, "failed to get OIDC")
 		}
 	}
+
 	return nil
 }
 
