@@ -3,7 +3,7 @@ steps:
     args: ['get', './...']
     env: ['PROJECT_ROOT=go-iapclient']
   - name: 'gcr.io/cloud-builders/go'
-    args: ['vet', './...']
+    args: ['vet']
     env: ['PROJECT_ROOT=go-iapclient']
   - name: 'gcr.io/cloud-builders/go'
     args: ['install', '.']
