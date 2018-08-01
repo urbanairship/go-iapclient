@@ -84,9 +84,6 @@ func NewIAP(clientID string) (*IAP, error) {
 }
 
 func (iap *IAP) refreshJwt(ctx context.Context) error {
-	// TODO add a check for GCE-based service account auth
-	// - We definitely can only proceed with a service account - normal user acounts will not work
-	// - Until implemented, we do not support auth based on a key, probably
 	signJwtName := fmt.Sprintf("projects/-/serviceAccounts/%v", iap.SignerEmail)
 
 	iap.Jwt.Exp = time.Now().Add(time.Hour).Unix()
