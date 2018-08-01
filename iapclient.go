@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
+	"github.com/pkg/errors"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/iam/v1"
 )
@@ -26,10 +26,6 @@ const (
 
 type oAuthTokenBody struct {
 	IDToken string `json:"id_token"`
-}
-
-type doer interface {
-	Do(*http.Request) (*http.Response, error)
 }
 
 // ClaimSet represents a JWT ClaimSet to represent all the fields for creating
@@ -94,7 +90,7 @@ func (iap *IAP) refreshJwt(ctx context.Context) error {
 
 	claimSetJSON, err := json.Marshal(iap.Jwt)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to marshal claimset to JSON")
 	}
 
 	var signJwtRequest iam.SignJwtRequest
@@ -102,12 +98,12 @@ func (iap *IAP) refreshJwt(ctx context.Context) error {
 
 	svc, err := iam.New(iap.GoogleClient)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to get IAM client")
 	}
 
 	ret, err := svc.Projects.ServiceAccounts.SignJwt(signJwtName, &signJwtRequest).Do()
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to get JWT signed by Google")
 	}
 
 	iap.SignedJwt = ret.SignedJwt
@@ -116,14 +112,13 @@ func (iap *IAP) refreshJwt(ctx context.Context) error {
 }
 
 func (iap *IAP) refreshOIDC(ctx context.Context) error {
-	log.Printf("Refreshing OIDC")
 	data := url.Values{}
 	data.Set("assertion", iap.SignedJwt)
 	data.Set("grant_type", jwtGrantType)
 
 	tokenReq, err := http.NewRequest("POST", oauthTokenURI, strings.NewReader(data.Encode()))
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to create HTTP request to get OAuth Token")
 	}
 
 	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -131,17 +126,17 @@ func (iap *IAP) refreshOIDC(ctx context.Context) error {
 
 	tokenResp, err := iap.GoogleClient.Do(tokenReq)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "OAuth Token HTTP request failed")
 	}
 
 	bodyJSON, err := ioutil.ReadAll(tokenResp.Body)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to read OAuth Token HTTP response body")
 	}
 
 	var body oAuthTokenBody
 	if err := json.Unmarshal(bodyJSON, &body); err != nil {
-		return err
+		return errors.Wrap(err, "failed to unmarshal OAuth Token HTTP response body JSON")
 	}
 	iap.OIDC = body.IDToken
 	return nil
@@ -154,7 +149,7 @@ func (iap *IAP) refresh(ctx context.Context) error {
 	if iap.GoogleClient == nil {
 		httpClient, err := google.DefaultClient(ctx, iamScope)
 		if err != nil {
-			return err
+			return errors.Wrap(err, "failed to get Google Default Client")
 		}
 		iap.GoogleClient = httpClient
 	}
@@ -162,19 +157,19 @@ func (iap *IAP) refresh(ctx context.Context) error {
 	if iap.SignerEmail == "" {
 		credentials, err := google.FindDefaultCredentials(ctx)
 		if err != nil {
-			return err
+			return errors.Wrap(err, "failed to get Google Default Credentials")
 		}
 
 		var credentialJSON CredentialJSON
 		if err := json.Unmarshal(credentials.JSON, &credentialJSON); err != nil {
-			return err
+			return errors.Wrap(err, "failed to unmarshal Google Default Credential JSON")
 		}
 
 		if credentialJSON == (CredentialJSON{}) {
 			// Looks like we're in GCE - Use the metadata service
 			signerEmail, err := metadata.Get("instance/service-accounts/default/email")
 			if err != nil {
-				return err
+				return errors.Wrap(err, "failed to get service account email from metadata server")
 			}
 			iap.SignerEmail = signerEmail
 		} else {
@@ -188,13 +183,11 @@ func (iap *IAP) refresh(ctx context.Context) error {
 
 	if iap.Jwt.Exp-10 < time.Now().Unix() {
 		if err := iap.refreshJwt(ctx); err != nil {
-			log.Fatalf("Failed to get and sign JWT: %v", err)
-			return err
+			return errors.Wrap(err, "failed to get and sign JWT")
 		}
 
 		if err := iap.refreshOIDC(ctx); err != nil {
-			log.Fatalf("Failed to OIDC: %v", err)
-			return err
+			return errors.Wrap(err, "failed to get OIDC")
 		}
 	}
 	return nil
@@ -203,19 +196,11 @@ func (iap *IAP) refresh(ctx context.Context) error {
 // RoundTrip makes the IAP object into a valid http.Transport interface
 func (iap *IAP) RoundTrip(req *http.Request) (resp *http.Response, err error) {
 	if err := iap.refresh(req.Context()); err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "failed to refresh auth")
 	}
 
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %v", iap.OIDC))
 
-	//reqDump, err := httputil.DumpRequestOut(req, true)
-	//if err == nil {
-	//	log.Printf("%s\n\n", reqDump)
-	//}
 	resp, err = iap.Transport.RoundTrip(req)
-	//respDump, err := httputil.DumpResponse(resp, true)
-	//if err == nil {
-	//	log.Printf("%s\n\n", respDump)
-	//}
 	return resp, err
 }
