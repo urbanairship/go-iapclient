@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
@@ -44,6 +45,19 @@ type ClaimSet struct {
 	TargetAudience string `json:"target_audience"`
 }
 
+// CredentialJSON represents a service account JSON credentials file
+type CredentialJSON struct {
+	Type                    string `json:"type"`
+	ProjectID               string `json:"project_id"`
+	PrivateKeyID            string `json:"private_key_id"`
+	PrivateKey              string `json:"private_key"`
+	ClientEmail             string `json:"client_email"`
+	AuthURI                 string `json:"auth_uri"`
+	TokenURI                string `json:"token_uri"`
+	AuthProviderX509CertURL string `json:"auth_provider_x509_cert_url"`
+	ClientX509CertURL       string `json:"client_x509_cert_url"`
+}
+
 // IAP struct to represent the latest retrieved auth details
 type IAP struct {
 	ClientID    string
@@ -54,19 +68,16 @@ type IAP struct {
 	Transport   *http.Transport
 }
 
+var refreshLock sync.Mutex
+
 // NewIAP creates a new IAP object to fetch and refresh IAP authentication
 func NewIAP(clientID string) (*IAP, error) {
 	// We should only have to get this once
-	signerEmail, err := metadata.Get("instance/service-accounts/default/email")
-	if err != nil {
-		return nil, err
-	}
 
 	iap := IAP{
-		ClientID:    clientID,
-		Jwt:         &ClaimSet{},
-		SignerEmail: signerEmail,
-		Transport:   &http.Transport{},
+		ClientID:  clientID,
+		Jwt:       &ClaimSet{},
+		Transport: &http.Transport{},
 	}
 	return &iap, nil
 }
@@ -152,6 +163,34 @@ func (iap *IAP) refreshOIDC(ctx context.Context) error {
 }
 
 func (iap *IAP) refresh(ctx context.Context) error {
+	refreshLock.Lock()
+	defer refreshLock.Unlock()
+	if iap.SignerEmail == "" {
+		credentials, err := google.FindDefaultCredentials(ctx)
+		if err != nil {
+			return err
+		}
+
+		var credentialJSON CredentialJSON
+		if err := json.Unmarshal(credentials.JSON, &credentialJSON); err != nil {
+			return err
+		}
+
+		if credentialJSON == (CredentialJSON{}) {
+			// Looks like we're in GCE - Use the metadata service
+			signerEmail, err := metadata.Get("instance/service-accounts/default/email")
+			if err != nil {
+				return err
+			}
+			iap.SignerEmail = signerEmail
+		} else {
+			// We're local with JSON file
+			if credentialJSON.Type != "service_account" {
+				return fmt.Errorf("iapclient: IAP auth only works with service_accounts, not %v", credentialJSON.Type)
+			}
+			iap.SignerEmail = credentialJSON.ClientEmail
+		}
+	}
 	if iap.Jwt.Exp-10 < time.Now().Unix() {
 		if err := iap.refreshJwt(ctx); err != nil {
 			log.Fatalf("Failed to get and sign JWT: %v", err)
@@ -166,19 +205,6 @@ func (iap *IAP) refresh(ctx context.Context) error {
 	return nil
 }
 
-// Do wraps the passed in httpClient's Do method, but refreshes the auth if
-// necessary, and adds the authentication header for IAP auth
-func (iap *IAP) Do(httpClient doer, req *http.Request) (resp *http.Response, err error) {
-	if err := iap.refresh(req.Context()); err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %v", iap.OIDC))
-
-	resp, err = httpClient.Do(req)
-	return resp, err
-}
-
 // RoundTrip makes the IAP object into a valid http.Transport interface
 func (iap *IAP) RoundTrip(req *http.Request) (resp *http.Response, err error) {
 	if err := iap.refresh(req.Context()); err != nil {
@@ -187,6 +213,14 @@ func (iap *IAP) RoundTrip(req *http.Request) (resp *http.Response, err error) {
 
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %v", iap.OIDC))
 
+	//reqDump, err := httputil.DumpRequestOut(req, true)
+	//if err == nil {
+	//	log.Printf("%s\n\n", reqDump)
+	//}
 	resp, err = iap.Transport.RoundTrip(req)
+	//respDump, err := httputil.DumpResponse(resp, true)
+	//if err == nil {
+	//	log.Printf("%s\n\n", respDump)
+	//}
 	return resp, err
 }
