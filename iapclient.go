@@ -60,12 +60,13 @@ type CredentialJSON struct {
 
 // IAP struct to represent the latest retrieved auth details
 type IAP struct {
-	ClientID    string
-	SignerEmail string
-	Jwt         *ClaimSet
-	SignedJwt   string
-	OIDC        string
-	Transport   *http.Transport
+	ClientID     string
+	SignerEmail  string
+	Jwt          *ClaimSet
+	SignedJwt    string
+	OIDC         string
+	Transport    *http.Transport
+	GoogleClient *http.Client
 }
 
 var refreshLock sync.Mutex
@@ -102,15 +103,7 @@ func (iap *IAP) refreshJwt(ctx context.Context) error {
 	var signJwtRequest iam.SignJwtRequest
 	signJwtRequest.Payload = string(claimSetJSON)
 
-	// This uses its own new google DefaultClient because it has to be
-	// Application Default authed, where the client for the main request does
-	// not
-	httpClient, err := google.DefaultClient(ctx, iamScope)
-	if err != nil {
-		return err
-	}
-
-	svc, err := iam.New(httpClient)
+	svc, err := iam.New(iap.GoogleClient)
 	if err != nil {
 		return err
 	}
@@ -139,12 +132,7 @@ func (iap *IAP) refreshOIDC(ctx context.Context) error {
 	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	tokenReq.Header.Set("Content-Length", strconv.Itoa(len(data.Encode())))
 
-	httpClient, err := google.DefaultClient(ctx, iamScope)
-	if err != nil {
-		return err
-	}
-
-	tokenResp, err := httpClient.Do(tokenReq)
+	tokenResp, err := iap.GoogleClient.Do(tokenReq)
 	if err != nil {
 		return err
 	}
@@ -165,6 +153,15 @@ func (iap *IAP) refreshOIDC(ctx context.Context) error {
 func (iap *IAP) refresh(ctx context.Context) error {
 	refreshLock.Lock()
 	defer refreshLock.Unlock()
+
+	if iap.GoogleClient == nil {
+		httpClient, err := google.DefaultClient(ctx, iamScope)
+		if err != nil {
+			return err
+		}
+		iap.GoogleClient = httpClient
+	}
+
 	if iap.SignerEmail == "" {
 		credentials, err := google.FindDefaultCredentials(ctx)
 		if err != nil {
@@ -191,6 +188,7 @@ func (iap *IAP) refresh(ctx context.Context) error {
 			iap.SignerEmail = credentialJSON.ClientEmail
 		}
 	}
+
 	if iap.Jwt.Exp-10 < time.Now().Unix() {
 		if err := iap.refreshJwt(ctx); err != nil {
 			log.Fatalf("Failed to get and sign JWT: %v", err)
