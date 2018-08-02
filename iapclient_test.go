@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/oauth2/google"
 )
 
 type MockedTransport struct {
@@ -37,6 +36,7 @@ func (m *MockedGoogleClient) Do(req *http.Request) (*http.Response, error) {
 	return nil, args.Error(1)
 }
 
+/*
 func googleFindDefaultCredentialsMock(ctx context.Context, scope ...string) (*google.Credentials, error) {
 	creds := google.Credentials{}
 	creds.JSON = []byte{'{', '}'}
@@ -50,6 +50,7 @@ func googleDefaultClientMock(ctx context.Context, scope ...string) (*http.Client
 func metadataGetMock(path string) (string, error) {
 	return "example@example.com", nil
 }
+*/
 
 func TestNewIAP(t *testing.T) {
 	assert := assert.New(t)
@@ -73,10 +74,6 @@ func TestRefresh(t *testing.T) {
 
 	iap.Transport = new(MockedTransport)
 	iap.GoogleClient = new(MockedGoogleClient)
-
-	googleFindDefaultCredentials = googleFindDefaultCredentialsMock
-	googleDefaultClient = googleDefaultClientMock
-	metadataGet = metadataGetMock
 
 	ctx := context.Background()
 	err = iap.refresh(ctx)

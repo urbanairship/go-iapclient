@@ -69,11 +69,6 @@ type IAP struct {
 
 var refreshLock sync.Mutex
 
-// These are used for testing so they can be masked
-var googleFindDefaultCredentials = google.FindDefaultCredentials
-var googleDefaultClient = google.DefaultClient
-var metadataGet = metadata.Get
-
 // NewIAP creates a new IAP object to fetch and refresh IAP authentication
 func NewIAP(clientID string) (*IAP, error) {
 	// We should only have to get this once
@@ -142,6 +137,7 @@ func (iap *IAP) refreshOIDC(ctx context.Context) error {
 	if err != nil {
 		return errors.Wrap(err, "OAuth Token HTTP request failed")
 	}
+	defer tokenResp.Body.Close()
 
 	bodyJSON, err := ioutil.ReadAll(tokenResp.Body)
 	if err != nil {
@@ -160,7 +156,7 @@ func (iap *IAP) refreshOIDC(ctx context.Context) error {
 // necessary
 func (iap *IAP) getGoogleClient(ctx context.Context) error {
 	if iap.GoogleClient == nil {
-		httpClient, err := googleDefaultClient(ctx, iamScope)
+		httpClient, err := google.DefaultClient(ctx, iamScope)
 		if err != nil {
 			return errors.Wrap(err, "google.DefaultClient failed")
 		}
@@ -176,7 +172,7 @@ func (iap *IAP) getSignerEmail(ctx context.Context) error {
 		return nil
 	}
 
-	credentials, err := googleFindDefaultCredentials(ctx)
+	credentials, err := google.FindDefaultCredentials(ctx)
 	if err != nil {
 		return errors.Wrap(err, "google.FindDefaultCredentials failed")
 	}
@@ -188,7 +184,7 @@ func (iap *IAP) getSignerEmail(ctx context.Context) error {
 
 	if credJSON == (credentialJSON{}) {
 		// Looks like we're in GCE - Use the metadata service
-		signerEmail, err := metadataGet("instance/service-accounts/default/email")
+		signerEmail, err := metadata.Get("instance/service-accounts/default/email")
 		if err != nil {
 			return errors.Wrap(err, "metadata get failed")
 		}
