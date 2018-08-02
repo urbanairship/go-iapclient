@@ -63,6 +63,10 @@ func metadataGetMock(path string) (string, error) {
 	return "example@example.com", nil
 }
 
+func metadataGetFailMock(path string) (string, error) {
+	return "", fmt.Errorf("Synthesized metadata.Get failure")
+}
+
 func signJwtMock(ctx context.Context, name string, request *iam.SignJwtRequest) (string, error) {
 	return "fake signed jwt", nil
 }
@@ -91,8 +95,6 @@ func TestGetTokenWithAppDefault(t *testing.T) {
 	require.Nil(err)
 	require.NotNil(iap)
 
-	iap.Transport = new(MockedTransport)
-
 	googleFindDefaultCredentials = googleFindDefaultCredentialsAppDefaultMock
 	metadataGet = metadataGetMock
 	signJwt = signJwtMock
@@ -101,6 +103,9 @@ func TestGetTokenWithAppDefault(t *testing.T) {
 	token, err := iap.GetToken(context.Background())
 	assert.Nil(err)
 	assert.Equal(token, "fake oauth token")
+
+	err = iap.refresh(context.Background())
+	assert.Nil(err)
 }
 
 func TestGetTokenWithServiceAccountJSON(t *testing.T) {
@@ -111,8 +116,6 @@ func TestGetTokenWithServiceAccountJSON(t *testing.T) {
 
 	require.Nil(err)
 	require.NotNil(iap)
-
-	iap.Transport = new(MockedTransport)
 
 	googleFindDefaultCredentials = googleFindDefaultCredentialsServiceAccountJSONMock
 	metadataGet = metadataGetMock
@@ -133,10 +136,48 @@ func TestGetTokenWithAuthorizedUserJSON(t *testing.T) {
 	require.Nil(err)
 	require.NotNil(iap)
 
-	iap.Transport = new(MockedTransport)
-
 	googleFindDefaultCredentials = googleFindDefaultCredentialsAuthorizedUserJSONMock
 	metadataGet = metadataGetMock
+	signJwt = signJwtMock
+	getOAuthToken = getOAuthTokenMock
+
+	token, err := iap.GetToken(context.Background())
+	assert.NotNil(err)
+	assert.Equal(token, "")
+}
+
+func TestGetTokenWithBadMetadataGet(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
+	iap, err := NewIAP("client-id")
+
+	require.Nil(err)
+	require.NotNil(iap)
+
+	googleFindDefaultCredentials = googleFindDefaultCredentialsAppDefaultMock
+	metadataGet = metadataGetFailMock
+	signJwt = signJwtMock
+	getOAuthToken = getOAuthTokenMock
+
+	token, err := iap.GetToken(context.Background())
+	assert.NotNil(err)
+	assert.Equal(token, "")
+}
+
+func TestRoundTrip(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
+	iap, err := NewIAP("client-id")
+
+	require.Nil(err)
+	require.NotNil(iap)
+
+	iap.Transport = new(MockedTransport)
+
+	googleFindDefaultCredentials = googleFindDefaultCredentialsAppDefaultMock
+	metadataGet = metadataGetFailMock
 	signJwt = signJwtMock
 	getOAuthToken = getOAuthTokenMock
 
