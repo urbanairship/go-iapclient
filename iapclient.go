@@ -28,9 +28,9 @@ type oAuthTokenBody struct {
 	IDToken string `json:"id_token"`
 }
 
-// ClaimSet represents a JWT ClaimSet to represent all the fields for creating
+// claimSet represents a JWT claimSet to represent all the fields for creating
 // the specific JSON Web Token we need
-type ClaimSet struct {
+type claimSet struct {
 	Aud            string `json:"aud"`
 	Exp            int64  `json:"exp"`
 	Scope          string `json:"scope"`
@@ -41,8 +41,8 @@ type ClaimSet struct {
 	TargetAudience string `json:"target_audience"`
 }
 
-// CredentialJSON represents a service account JSON credentials file
-type CredentialJSON struct {
+// credentialJSON represents a service account JSON credentials file
+type credentialJSON struct {
 	Type                    string `json:"type"`
 	ProjectID               string `json:"project_id"`
 	PrivateKeyID            string `json:"private_key_id"`
@@ -58,7 +58,7 @@ type CredentialJSON struct {
 type IAP struct {
 	ClientID     string
 	SignerEmail  string
-	Jwt          *ClaimSet
+	Jwt          *claimSet
 	SignedJwt    string
 	OIDC         string
 	Transport    http.RoundTripper
@@ -69,13 +69,18 @@ type IAP struct {
 
 var refreshLock sync.Mutex
 
+// These are used for testing so they can be masked
+var googleFindDefaultCredentials = google.FindDefaultCredentials
+var googleDefaultClient = google.DefaultClient
+var metadataGet = metadata.Get
+
 // NewIAP creates a new IAP object to fetch and refresh IAP authentication
 func NewIAP(clientID string) (*IAP, error) {
 	// We should only have to get this once
 
 	iap := IAP{
 		ClientID:  clientID,
-		Jwt:       &ClaimSet{},
+		Jwt:       &claimSet{},
 		Transport: &http.Transport{},
 	}
 	return &iap, nil
@@ -155,7 +160,7 @@ func (iap *IAP) refreshOIDC(ctx context.Context) error {
 // necessary
 func (iap *IAP) getGoogleClient(ctx context.Context) error {
 	if iap.GoogleClient == nil {
-		httpClient, err := google.DefaultClient(ctx, iamScope)
+		httpClient, err := googleDefaultClient(ctx, iamScope)
 		if err != nil {
 			return errors.Wrap(err, "google.DefaultClient failed")
 		}
@@ -171,29 +176,29 @@ func (iap *IAP) getSignerEmail(ctx context.Context) error {
 		return nil
 	}
 
-	credentials, err := google.FindDefaultCredentials(ctx)
+	credentials, err := googleFindDefaultCredentials(ctx)
 	if err != nil {
 		return errors.Wrap(err, "google.FindDefaultCredentials failed")
 	}
 
-	var credentialJSON CredentialJSON
-	if err := json.Unmarshal(credentials.JSON, &credentialJSON); err != nil {
+	var credJSON credentialJSON
+	if err := json.Unmarshal(credentials.JSON, &credJSON); err != nil {
 		return errors.Wrap(err, "failed to unmarshal Google Default Credential JSON")
 	}
 
-	if credentialJSON == (CredentialJSON{}) {
+	if credJSON == (credentialJSON{}) {
 		// Looks like we're in GCE - Use the metadata service
-		signerEmail, err := metadata.Get("instance/service-accounts/default/email")
+		signerEmail, err := metadataGet("instance/service-accounts/default/email")
 		if err != nil {
 			return errors.Wrap(err, "metadata get failed")
 		}
 		iap.SignerEmail = signerEmail
 	} else {
-		// We're local with JSON file
-		if credentialJSON.Type != "service_account" {
-			return fmt.Errorf("IAP auth only works with service_accounts, got %v", credentialJSON.Type)
+		// We're local with JSON file - Get the email directly
+		if credJSON.Type != "service_account" {
+			return fmt.Errorf("IAP auth only works with service_accounts, got %v", credJSON.Type)
 		}
-		iap.SignerEmail = credentialJSON.ClientEmail
+		iap.SignerEmail = credJSON.ClientEmail
 	}
 	return nil
 }
