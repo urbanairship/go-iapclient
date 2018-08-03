@@ -177,11 +177,15 @@ func TestRoundTrip(t *testing.T) {
 	iap.Transport = new(MockedTransport)
 
 	googleFindDefaultCredentials = googleFindDefaultCredentialsAppDefaultMock
-	metadataGet = metadataGetFailMock
+	metadataGet = metadataGetMock
 	signJwt = signJwtMock
 	getOAuthToken = getOAuthTokenMock
 
-	token, err := iap.GetToken(context.Background())
-	assert.NotNil(err)
-	assert.Equal(token, "")
+	req, err := http.NewRequest("GET", "http://localhost:65535/", nil)
+	require.Nil(err)
+
+	resp, err := iap.RoundTrip(req)
+	assert.Nil(err)
+	assert.NotNil(resp)
+
 }
