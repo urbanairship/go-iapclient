@@ -34,20 +34,6 @@ func (c *HttpClientMock) Do(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-/*
-type MockedTransport struct {
-	mock.Mock
-}
-
-func (m *MockedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	args := m.Called(req)
-	log.Printf("shit: %v", args)
-	//return args.Bool(0), args.Error(1)
-	return nil, fmt.Errorf("MockedTransport")
-	return nil, args.Error(1)
-}
-*/
-
 func googleFindDefaultCredentialsAppDefaultMock(ctx context.Context, scope ...string) (*google.Credentials, error) {
 	creds := google.Credentials{}
 	creds.JSON = []byte(`{}`)
@@ -132,7 +118,8 @@ func TestRefreshWithAppDefault(t *testing.T) {
 
 	t.Run("refreshJwt", func(t *testing.T) {
 		assert.NotNil(iap.SignedJwt)
-		// In testing context iap.SignedJwt is actually the iam.SignJwtRequest.Payload
+		// In testing context iap.SignedJwt is actually the claimSet that was
+		// sent to be signed
 		var cs claimSet
 		err = json.Unmarshal([]byte(iap.SignedJwt), &cs)
 		assert.Nil(err)
@@ -147,6 +134,10 @@ func TestRefreshWithAppDefault(t *testing.T) {
 		assert.Equal("fake_id_token", iap.OIDC)
 	})
 
+	t.Run("refresh", func(t *testing.T) {
+		err = iap.refresh(iap.Context)
+		assert.Nil(err)
+	})
 }
 
 func TestRefreshWithServiceAccountJSON(t *testing.T) {
