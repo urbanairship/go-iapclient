@@ -33,11 +33,8 @@ type oAuthTokenBody struct {
 type claimSet struct {
 	Aud            string `json:"aud"`
 	Exp            int64  `json:"exp"`
-	Scope          string `json:"scope"`
 	Iss            string `json:"iss"`
 	Iat            int64  `json:"iat"`
-	Typ            string `json:"typ,omitempty"`
-	Sub            string `json:"sub,omitempty"`
 	TargetAudience string `json:"target_audience"`
 }
 
@@ -54,6 +51,10 @@ type credentialJSON struct {
 	ClientX509CertURL       string `json:"client_x509_cert_url"`
 }
 
+type Doer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
 // IAP struct to represent the latest retrieved auth details
 type IAP struct {
 	ClientID    string
@@ -62,6 +63,8 @@ type IAP struct {
 	SignedJwt   string
 	OIDC        string
 	Transport   http.RoundTripper
+	HttpClient  Doer
+	Context     context.Context
 }
 
 var refreshLock sync.Mutex
@@ -70,7 +73,6 @@ var refreshLock sync.Mutex
 var googleFindDefaultCredentials = google.FindDefaultCredentials
 var metadataGet = metadata.Get
 var signJwt = signJwtReal
-var getOAuthToken = getOAuthTokenReal
 
 // NewIAP creates a new IAP object to fetch and refresh IAP authentication
 func NewIAP(clientID string) (*IAP, error) {
@@ -85,12 +87,12 @@ func NewIAP(clientID string) (*IAP, error) {
 }
 
 // A wrapper to deal with upstream API call so we can skip this all during testing
-func signJwtReal(ctx context.Context, name string, request *iam.SignJwtRequest) (string, error) {
-	httpClient, err := google.DefaultClient(ctx, iamScope)
-	if err != nil {
-		return "", errors.Wrap(err, "google.DefaultClient failed")
+func signJwtReal(httpClient Doer, name string, request *iam.SignJwtRequest) (string, error) {
+	client, ok := httpClient.(*http.Client)
+	if !ok {
+		return "", fmt.Errorf("unknown client type: %T", httpClient)
 	}
-	svc, err := iam.New(httpClient)
+	svc, err := iam.New(client)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to get IAM client")
 	}
@@ -106,7 +108,7 @@ func signJwtReal(ctx context.Context, name string, request *iam.SignJwtRequest) 
 // instead of signing it ourselves because a) we don't have the private key in
 // some cases (Application Default), and b) that requires a bunch more
 // libraries
-func (iap *IAP) refreshJwt(ctx context.Context) error {
+func (iap *IAP) refreshJwt() error {
 	iap.Jwt.Exp = time.Now().Add(time.Hour).Unix()
 	iap.Jwt.Aud = oauthTokenURI
 	iap.Jwt.Iss = iap.SignerEmail
@@ -122,7 +124,7 @@ func (iap *IAP) refreshJwt(ctx context.Context) error {
 	var signJwtRequest iam.SignJwtRequest
 	signJwtRequest.Payload = string(claimSetJSON)
 
-	signedJwt, err := signJwt(ctx, signJwtName, &signJwtRequest)
+	signedJwt, err := signJwt(iap.HttpClient, signJwtName, &signJwtRequest)
 	if err != nil {
 		// already wrapped by signJwt
 		return err
@@ -132,64 +134,50 @@ func (iap *IAP) refreshJwt(ctx context.Context) error {
 	return nil
 }
 
-func getOAuthTokenReal(ctx context.Context, assertion string) (string, error) {
+// refreshOIDC is responsible for using our previously gotten JWT to talk to
+// the Google OAuth URI to get a OIDC bearer token. This token is the one
+// actually sent to the IAP-protected endpoint as auth
+func (iap *IAP) refreshOIDC() error {
 	data := url.Values{}
-	data.Set("assertion", assertion)
+	data.Set("assertion", iap.SignedJwt)
 	data.Set("grant_type", jwtGrantType)
 
 	req, err := http.NewRequest("POST", oauthTokenURI, strings.NewReader(data.Encode()))
 	if err != nil {
-		return "", errors.Wrap(err, "failed to create HTTP request to get OAuth Token")
+		return errors.Wrap(err, "failed to create HTTP request to get OAuth Token")
 	}
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Content-Length", strconv.Itoa(len(data.Encode())))
 
-	httpClient, err := google.DefaultClient(ctx, iamScope)
+	resp, err := iap.HttpClient.Do(req)
 	if err != nil {
-		return "", errors.Wrap(err, "google.DefaultClient failed")
-	}
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return "", errors.Wrap(err, "OAuth Token HTTP request failed")
+		return errors.Wrap(err, "OAuth Token HTTP request failed")
 	}
 	defer resp.Body.Close()
 
 	bodyJSON, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return "", errors.Wrap(err, "failed to read OAuth Token HTTP response body")
+		return errors.Wrap(err, "failed to read OAuth Token HTTP response body")
 	}
 
 	var body oAuthTokenBody
 	if err := json.Unmarshal(bodyJSON, &body); err != nil {
-		return "", errors.Wrap(err, "OAuth token unmarshal failed")
+		return errors.Wrap(err, "OAuth token unmarshal failed")
 	}
 
-	return body.IDToken, nil
-}
-
-// refreshOIDC is responsible for using our previously gotten JWT to talk to
-// the Google OAuth URI to get a OIDC bearer token. This token is the one
-// actually sent to the IAP-protected endpoint as auth
-func (iap *IAP) refreshOIDC(ctx context.Context) error {
-	token, err := getOAuthToken(ctx, iap.SignedJwt)
-	if err != nil {
-		// already wrapped by getOAuthToken
-		return err
-	}
-	iap.OIDC = token
+	iap.OIDC = body.IDToken
 	return nil
 }
 
 // getSignerEmail finds the service account's email address, either via the
 // Default Credentials JSON blob, or via the metadata service
-func (iap *IAP) getSignerEmail(ctx context.Context) error {
+func (iap *IAP) getSignerEmail() error {
 	if iap.SignerEmail != "" {
 		return nil
 	}
 
-	credentials, err := googleFindDefaultCredentials(ctx)
+	credentials, err := googleFindDefaultCredentials(iap.Context)
 	if err != nil {
 		return errors.Wrap(err, "google.FindDefaultCredentials failed")
 	}
@@ -222,17 +210,29 @@ func (iap *IAP) refresh(ctx context.Context) error {
 	refreshLock.Lock()
 	defer refreshLock.Unlock()
 
+	// Use the context from the http request that triggered the refresh for the
+	// ancillary requests
+	iap.Context = ctx
+
 	// Initialize
-	if err := iap.getSignerEmail(ctx); err != nil {
+	if err := iap.getSignerEmail(); err != nil {
 		return errors.Wrap(err, "failed to get service account email")
+	}
+
+	if iap.HttpClient == nil {
+		httpClient, err := google.DefaultClient(iap.Context, iamScope)
+		if err != nil {
+			return errors.Wrap(err, "google.DefaultClient failed")
+		}
+		iap.HttpClient = httpClient
 	}
 
 	// Refresh
 	if iap.Jwt.Exp-10 < time.Now().Unix() {
-		if err := iap.refreshJwt(ctx); err != nil {
+		if err := iap.refreshJwt(); err != nil {
 			return errors.Wrap(err, "failed to get and sign JWT")
 		}
-		if err := iap.refreshOIDC(ctx); err != nil {
+		if err := iap.refreshOIDC(); err != nil {
 			return errors.Wrap(err, "failed to get OIDC")
 		}
 	}
@@ -240,16 +240,9 @@ func (iap *IAP) refresh(ctx context.Context) error {
 	return nil
 }
 
-// GetToken gets or refreshes and returns an IAP bearer token
-func (iap *IAP) GetToken(ctx context.Context) (token string, err error) {
-	if err := iap.refresh(ctx); err != nil {
-		return "", errors.Wrap(err, "failed to refresh auth")
-	}
-	return iap.OIDC, nil
-}
-
 // RoundTrip makes the IAP object into a valid http.Transport interface
 func (iap *IAP) RoundTrip(req *http.Request) (resp *http.Response, err error) {
+
 	if err := iap.refresh(req.Context()); err != nil {
 		return nil, errors.Wrap(err, "failed to refresh auth")
 	}

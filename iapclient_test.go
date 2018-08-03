@@ -1,19 +1,40 @@
 package iapclient
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
-	"log"
+	"io"
 	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2/google"
 	iam "google.golang.org/api/iam/v1"
 )
 
+type nopCloser struct {
+	io.Reader
+}
+
+func (nopCloser) Close() error { return nil }
+
+type HttpClientMock struct{}
+
+func (c *HttpClientMock) Do(req *http.Request) (*http.Response, error) {
+	resp := &http.Response{}
+	switch req.URL.String() {
+	case "https://www.googleapis.com/oauth2/v4/token":
+		resp.Body = nopCloser{bytes.NewBufferString("{\"id_token\": \"fake_id_token\"}")}
+	default:
+		return nil, fmt.Errorf("Unhandled testing URL: %v", req.URL)
+	}
+	return resp, nil
+}
+
+/*
 type MockedTransport struct {
 	mock.Mock
 }
@@ -25,6 +46,7 @@ func (m *MockedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return nil, fmt.Errorf("MockedTransport")
 	return nil, args.Error(1)
 }
+*/
 
 func googleFindDefaultCredentialsAppDefaultMock(ctx context.Context, scope ...string) (*google.Credentials, error) {
 	creds := google.Credentials{}
@@ -60,19 +82,15 @@ func googleFindDefaultCredentialsServiceAccountJSONMock(ctx context.Context, sco
 }
 
 func metadataGetMock(path string) (string, error) {
-	return "example@example.com", nil
+	return "some-email@some-project.iam.gserviceaccount.com", nil
 }
 
 func metadataGetFailMock(path string) (string, error) {
 	return "", fmt.Errorf("Synthesized metadata.Get failure")
 }
 
-func signJwtMock(ctx context.Context, name string, request *iam.SignJwtRequest) (string, error) {
-	return "fake signed jwt", nil
-}
-
-func getOAuthTokenMock(ctx context.Context, assertion string) (string, error) {
-	return "fake oauth token", nil
+func signJwtMock(httpClient Doer, name string, request *iam.SignJwtRequest) (string, error) {
+	return string(request.Payload), nil
 }
 
 func TestNewIAP(t *testing.T) {
@@ -86,7 +104,7 @@ func TestNewIAP(t *testing.T) {
 	assert.Equal("client-id", iap.ClientID)
 }
 
-func TestGetTokenWithAppDefault(t *testing.T) {
+func TestRefreshWithAppDefault(t *testing.T) {
 	assert := assert.New(t)
 	require := require.New(t)
 
@@ -94,21 +112,44 @@ func TestGetTokenWithAppDefault(t *testing.T) {
 
 	require.Nil(err)
 	require.NotNil(iap)
+
+	iap.HttpClient = &HttpClientMock{}
 
 	googleFindDefaultCredentials = googleFindDefaultCredentialsAppDefaultMock
 	metadataGet = metadataGetMock
 	signJwt = signJwtMock
-	getOAuthToken = getOAuthTokenMock
 
-	token, err := iap.GetToken(context.Background())
-	assert.Nil(err)
-	assert.Equal(token, "fake oauth token")
+	iap.Context = context.Background()
 
-	err = iap.refresh(context.Background())
-	assert.Nil(err)
+	t.Run("refresh", func(t *testing.T) {
+		err = iap.refresh(iap.Context)
+		assert.Nil(err)
+	})
+
+	t.Run("getSignerEmail", func(t *testing.T) {
+		assert.Equal("some-email@some-project.iam.gserviceaccount.com", iap.SignerEmail)
+	})
+
+	t.Run("refreshJwt", func(t *testing.T) {
+		assert.NotNil(iap.SignedJwt)
+		// In testing context iap.SignedJwt is actually the iam.SignJwtRequest.Payload
+		var cs claimSet
+		err = json.Unmarshal([]byte(iap.SignedJwt), &cs)
+		assert.Nil(err)
+
+		assert.Equal("https://www.googleapis.com/oauth2/v4/token", cs.Aud)
+		assert.Equal("some-email@some-project.iam.gserviceaccount.com", cs.Iss)
+		assert.Equal("client-id", cs.TargetAudience)
+	})
+
+	t.Run("refreshJwt", func(t *testing.T) {
+		assert.NotNil(iap.OIDC)
+		assert.Equal("fake_id_token", iap.OIDC)
+	})
+
 }
 
-func TestGetTokenWithServiceAccountJSON(t *testing.T) {
+func TestRefreshWithServiceAccountJSON(t *testing.T) {
 	assert := assert.New(t)
 	require := require.New(t)
 
@@ -116,18 +157,43 @@ func TestGetTokenWithServiceAccountJSON(t *testing.T) {
 
 	require.Nil(err)
 	require.NotNil(iap)
+
+	iap.HttpClient = &HttpClientMock{}
 
 	googleFindDefaultCredentials = googleFindDefaultCredentialsServiceAccountJSONMock
 	metadataGet = metadataGetMock
 	signJwt = signJwtMock
-	getOAuthToken = getOAuthTokenMock
 
-	token, err := iap.GetToken(context.Background())
-	assert.Nil(err)
-	assert.Equal(token, "fake oauth token")
+	iap.Context = context.Background()
+
+	t.Run("refresh", func(t *testing.T) {
+		err = iap.refresh(iap.Context)
+		assert.Nil(err)
+	})
+
+	t.Run("getSignerEmail", func(t *testing.T) {
+		assert.Equal("some-email@some-project.iam.gserviceaccount.com", iap.SignerEmail)
+	})
+
+	t.Run("refreshJwt", func(t *testing.T) {
+		assert.NotNil(iap.SignedJwt)
+		// In testing context iap.SignedJwt is actually the iam.SignJwtRequest.Payload
+		var cs claimSet
+		err = json.Unmarshal([]byte(iap.SignedJwt), &cs)
+		assert.Nil(err)
+
+		assert.Equal("https://www.googleapis.com/oauth2/v4/token", cs.Aud)
+		assert.Equal("some-email@some-project.iam.gserviceaccount.com", cs.Iss)
+		assert.Equal("client-id", cs.TargetAudience)
+	})
+
+	t.Run("refreshJwt", func(t *testing.T) {
+		assert.NotNil(iap.OIDC)
+		assert.Equal("fake_id_token", iap.OIDC)
+	})
 }
 
-func TestGetTokenWithAuthorizedUserJSON(t *testing.T) {
+func TestRefreshWithAuthorizedUserJSON(t *testing.T) {
 	assert := assert.New(t)
 	require := require.New(t)
 
@@ -135,18 +201,22 @@ func TestGetTokenWithAuthorizedUserJSON(t *testing.T) {
 
 	require.Nil(err)
 	require.NotNil(iap)
+
+	iap.HttpClient = &HttpClientMock{}
 
 	googleFindDefaultCredentials = googleFindDefaultCredentialsAuthorizedUserJSONMock
 	metadataGet = metadataGetMock
 	signJwt = signJwtMock
-	getOAuthToken = getOAuthTokenMock
 
-	token, err := iap.GetToken(context.Background())
-	assert.NotNil(err)
-	assert.Equal(token, "")
+	iap.Context = context.Background()
+
+	t.Run("refresh", func(t *testing.T) {
+		err = iap.refresh(iap.Context)
+		assert.NotNil(err)
+	})
 }
 
-func TestGetTokenWithBadMetadataGet(t *testing.T) {
+func TestRefreshWithFailingMetadata(t *testing.T) {
 	assert := assert.New(t)
 	require := require.New(t)
 
@@ -155,14 +225,18 @@ func TestGetTokenWithBadMetadataGet(t *testing.T) {
 	require.Nil(err)
 	require.NotNil(iap)
 
-	googleFindDefaultCredentials = googleFindDefaultCredentialsAppDefaultMock
+	iap.HttpClient = &HttpClientMock{}
+
+	googleFindDefaultCredentials = googleFindDefaultCredentialsAuthorizedUserJSONMock
 	metadataGet = metadataGetFailMock
 	signJwt = signJwtMock
-	getOAuthToken = getOAuthTokenMock
 
-	token, err := iap.GetToken(context.Background())
-	assert.NotNil(err)
-	assert.Equal(token, "")
+	iap.Context = context.Background()
+
+	t.Run("refresh", func(t *testing.T) {
+		err = iap.refresh(iap.Context)
+		assert.NotNil(err)
+	})
 }
 
 func TestRoundTrip(t *testing.T) {
@@ -174,18 +248,18 @@ func TestRoundTrip(t *testing.T) {
 	require.Nil(err)
 	require.NotNil(iap)
 
-	iap.Transport = new(MockedTransport)
+	iap.HttpClient = &HttpClientMock{}
 
 	googleFindDefaultCredentials = googleFindDefaultCredentialsAppDefaultMock
 	metadataGet = metadataGetMock
 	signJwt = signJwtMock
-	getOAuthToken = getOAuthTokenMock
 
-	req, err := http.NewRequest("GET", "http://localhost:65535/", nil)
-	require.Nil(err)
+	iap.Context = context.Background()
 
-	resp, err := iap.RoundTrip(req)
+	req, err := http.NewRequest("GET", "http://localhost", nil)
 	assert.Nil(err)
-	assert.NotNil(resp)
-
+	resp, err := iap.RoundTrip(req)
+	assert.NotNil(err)
+	_ = resp
+	//assert.Equal("", resp)
 }
