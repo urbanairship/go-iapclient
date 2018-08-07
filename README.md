@@ -60,5 +60,5 @@ The high-level summary is
 1. Use the returned string for auth by adding `Authorization: Bearer <string>`
    to the IAP-directed request
 
-__[1] https://cloud.google.com/iap/docs/authentication-howto
-[2] https://cloud.google.com/iam/reference/rest/v1/projects.serviceAccounts/signJwt
+[1]: https://cloud.google.com/iap/docs/authentication-howto
+[2]: https://cloud.google.com/iam/reference/rest/v1/projects.serviceAccounts/signJwt
