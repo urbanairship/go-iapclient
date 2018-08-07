@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"testing"
 
@@ -28,6 +29,20 @@ func (c *HttpClientMock) Do(req *http.Request) (*http.Response, error) {
 	switch req.URL.String() {
 	case "https://www.googleapis.com/oauth2/v4/token":
 		resp.Body = nopCloser{bytes.NewBufferString("{\"id_token\": \"fake_id_token\"}")}
+	default:
+		return nil, fmt.Errorf("Unhandled testing URL: %v", req.URL)
+	}
+	return resp, nil
+}
+
+type TransportMock struct{}
+
+func (c *TransportMock) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp := &http.Response{}
+	switch req.URL.String() {
+	case "http://localhost/roundtrip":
+		auth := req.Header.Get("Authorization")
+		resp.Body = nopCloser{bytes.NewBufferString(fmt.Sprintf("auth header: %v", auth))}
 	default:
 		return nil, fmt.Errorf("Unhandled testing URL: %v", req.URL)
 	}
@@ -83,7 +98,7 @@ func TestNewIAP(t *testing.T) {
 	assert := assert.New(t)
 	require := require.New(t)
 
-	iap, err := NewIAP("client-id")
+	iap, err := NewIAP("client-id", nil)
 
 	require.Nil(err)
 	require.NotNil(iap)
@@ -94,12 +109,12 @@ func TestRefreshWithAppDefault(t *testing.T) {
 	assert := assert.New(t)
 	require := require.New(t)
 
-	iap, err := NewIAP("client-id")
+	iap, err := NewIAP("client-id", &Config{
+		HttpClient: &HttpClientMock{},
+	})
 
 	require.Nil(err)
 	require.NotNil(iap)
-
-	iap.httpClient = &HttpClientMock{}
 
 	googleFindDefaultCredentials = googleFindDefaultCredentialsAppDefaultMock
 	metadataGet = metadataGetMock
@@ -144,12 +159,12 @@ func TestRefreshWithServiceAccountJSON(t *testing.T) {
 	assert := assert.New(t)
 	require := require.New(t)
 
-	iap, err := NewIAP("client-id")
+	iap, err := NewIAP("client-id", &Config{
+		HttpClient: &HttpClientMock{},
+	})
 
 	require.Nil(err)
 	require.NotNil(iap)
-
-	iap.httpClient = &HttpClientMock{}
 
 	googleFindDefaultCredentials = googleFindDefaultCredentialsServiceAccountJSONMock
 	metadataGet = metadataGetMock
@@ -188,12 +203,12 @@ func TestRefreshWithAuthorizedUserJSON(t *testing.T) {
 	assert := assert.New(t)
 	require := require.New(t)
 
-	iap, err := NewIAP("client-id")
+	iap, err := NewIAP("client-id", &Config{
+		HttpClient: &HttpClientMock{},
+	})
 
 	require.Nil(err)
 	require.NotNil(iap)
-
-	iap.httpClient = &HttpClientMock{}
 
 	googleFindDefaultCredentials = googleFindDefaultCredentialsAuthorizedUserJSONMock
 	metadataGet = metadataGetMock
@@ -211,12 +226,12 @@ func TestRefreshWithFailingMetadata(t *testing.T) {
 	assert := assert.New(t)
 	require := require.New(t)
 
-	iap, err := NewIAP("client-id")
+	iap, err := NewIAP("client-id", &Config{
+		HttpClient: &HttpClientMock{},
+	})
 
 	require.Nil(err)
 	require.NotNil(iap)
-
-	iap.httpClient = &HttpClientMock{}
 
 	googleFindDefaultCredentials = googleFindDefaultCredentialsAuthorizedUserJSONMock
 	metadataGet = metadataGetFailMock
@@ -234,12 +249,13 @@ func TestRoundTrip(t *testing.T) {
 	assert := assert.New(t)
 	require := require.New(t)
 
-	iap, err := NewIAP("client-id")
+	iap, err := NewIAP("client-id", &Config{
+		HttpClient: &HttpClientMock{},
+		Transport:  &TransportMock{},
+	})
 
 	require.Nil(err)
 	require.NotNil(iap)
-
-	iap.httpClient = &HttpClientMock{}
 
 	googleFindDefaultCredentials = googleFindDefaultCredentialsAppDefaultMock
 	metadataGet = metadataGetMock
@@ -247,10 +263,15 @@ func TestRoundTrip(t *testing.T) {
 
 	iap.context = context.Background()
 
-	req, err := http.NewRequest("GET", "http://localhost", nil)
+	req, err := http.NewRequest("GET", "http://localhost/roundtrip", nil)
 	assert.Nil(err)
+
 	resp, err := iap.RoundTrip(req)
-	assert.NotNil(err)
-	_ = resp
-	//assert.Equal("", resp)
+	assert.Nil(err)
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	assert.Nil(err)
+
+	assert.Equal("auth header: Bearer fake_id_token", string(body))
 }

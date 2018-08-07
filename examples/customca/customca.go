@@ -46,17 +46,16 @@ func main() {
 		log.Fatalf("Failed create HTTP request: %v", err)
 	}
 
-	iap, err := iapclient.NewIAP(*cid)
-	if err != nil {
-		log.Fatalf("Failed to create new IAP object: %v", err)
-	}
-
 	// customize the trusted CA list to support talking to prom
 	transport, err := getCustomTransport()
 	if err != nil {
 		log.Fatalf("Couldn't get custom transport: %v", err)
 	}
-	iap.Transport = transport
+
+	iap, err := iapclient.NewIAP(*cid, &iapclient.Config{Transport: transport})
+	if err != nil {
+		log.Fatalf("Failed to create new IAP object: %v", err)
+	}
 
 	httpClient := &http.Client{Transport: iap}
 

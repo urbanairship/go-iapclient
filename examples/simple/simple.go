@@ -17,7 +17,7 @@ var (
 
 func main() {
 	kingpin.Parse()
-	iap, err := iapclient.NewIAP(*cid)
+	iap, err := iapclient.NewIAP(*cid, nil)
 	if err != nil {
 		log.Fatalf("Failed to create new IAP object: %v", err)
 	}

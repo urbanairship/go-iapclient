@@ -46,17 +46,16 @@ func getCustomTransport() (transport *http.Transport, err error) {
 func main() {
 	kingpin.Parse()
 
-	iap, err := iapclient.NewIAP(*clientID)
-	if err != nil {
-		log.Fatalf("Failed to create new IAP object: %v", err)
-	}
-
 	// customize the trusted CA list to support talking to prom
 	transport, err := getCustomTransport()
 	if err != nil {
 		log.Fatalf("Coudln't get custom transport: %v", err)
 	}
-	iap.Transport = transport
+
+	iap, err := iapclient.NewIAP(*clientID, &iapclient.Config{Transport: transport})
+	if err != nil {
+		log.Fatalf("Failed to create new IAP object: %v", err)
+	}
 
 	client, err := prometheus.NewClient(prometheus.Config{Address: *uri, RoundTripper: iap})
 	if err != nil {

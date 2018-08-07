@@ -65,7 +65,13 @@ type IAP struct {
 	oidc        string
 	httpClient  Doer
 	context     context.Context
-	Transport   http.RoundTripper
+	transport   http.RoundTripper
+}
+
+// Config stores parameters optional for NewIAP
+type Config struct {
+	HttpClient Doer
+	Transport  http.RoundTripper
 }
 
 // Side-effect dependencies for masking in tests
@@ -74,13 +80,28 @@ var metadataGet = metadata.Get
 var signJwt = signJwtReal
 
 // NewIAP creates a new IAP object to fetch and refresh IAP authentication
-func NewIAP(cid string) (*IAP, error) {
+func NewIAP(cid string, config *Config) (*IAP, error) {
 	// We should only have to get this once
 
+	var transport http.RoundTripper
+	var httpClient Doer
+
+	transport = &http.Transport{}
+	httpClient = nil
+	if config != nil {
+		if config.Transport != nil {
+			transport = config.Transport
+		}
+		if config.HttpClient != nil {
+			httpClient = config.HttpClient
+		}
+	}
+
 	iap := IAP{
-		clientID:  cid,
-		jwt:       &claimSet{},
-		Transport: &http.Transport{},
+		clientID:   cid,
+		jwt:        &claimSet{},
+		transport:  transport,
+		httpClient: httpClient,
 	}
 	return &iap, nil
 }
@@ -246,6 +267,6 @@ func (iap *IAP) RoundTrip(req *http.Request) (resp *http.Response, err error) {
 
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %v", iap.oidc))
 
-	resp, err = iap.Transport.RoundTrip(req)
+	resp, err = iap.transport.RoundTrip(req)
 	return resp, err
 }
