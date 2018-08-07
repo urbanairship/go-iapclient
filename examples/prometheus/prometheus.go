@@ -52,7 +52,7 @@ func main() {
 	}
 
 	// customize the trusted CA list to support talking to prom
-	transport, err := getCustomTransport(:
+	transport, err := getCustomTransport()
 	if err != nil {
 		log.Fatalf("Coudln't get custom transport: %v", err)
 	}

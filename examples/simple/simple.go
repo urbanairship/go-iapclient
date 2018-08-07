@@ -11,13 +11,13 @@ import (
 )
 
 var (
-	clientID = kingpin.Flag("client-id", "OAuth Client ID").Required().String()
-	uri      = kingpin.Flag("uri", "URI to get").Required().String()
+	cid = kingpin.Flag("client-id", "OAuth Client ID").Required().String()
+	uri = kingpin.Flag("uri", "URI to get").Required().String()
 )
 
 func main() {
 	kingpin.Parse()
-	iap, err := iapclient.NewIAP(*clientID)
+	iap, err := iapclient.NewIAP(*cid)
 	if err != nil {
 		log.Fatalf("Failed to create new IAP object: %v", err)
 	}

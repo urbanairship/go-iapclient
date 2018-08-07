@@ -57,14 +57,15 @@ type Doer interface {
 
 // IAP struct to represent the latest retrieved auth details
 type IAP struct {
-	ClientID    string
-	SignerEmail string
-	Jwt         *claimSet
-	SignedJwt   string
-	OIDC        string
+	sync.Mutex
+	clientID    string
+	signerEmail string
+	jwt         *claimSet
+	signedJwt   string
+	oidc        string
+	httpClient  Doer
+	context     context.Context
 	Transport   http.RoundTripper
-	HttpClient  Doer
-	Context     context.Context
 }
 
 var refreshLock sync.Mutex
@@ -75,12 +76,12 @@ var metadataGet = metadata.Get
 var signJwt = signJwtReal
 
 // NewIAP creates a new IAP object to fetch and refresh IAP authentication
-func NewIAP(clientID string) (*IAP, error) {
+func NewIAP(cid string) (*IAP, error) {
 	// We should only have to get this once
 
 	iap := IAP{
-		ClientID:  clientID,
-		Jwt:       &claimSet{},
+		clientID:  cid,
+		jwt:       &claimSet{},
 		Transport: &http.Transport{},
 	}
 	return &iap, nil
@@ -109,28 +110,28 @@ func signJwtReal(httpClient Doer, name string, request *iam.SignJwtRequest) (str
 // some cases (Application Default), and b) that requires a bunch more
 // libraries
 func (iap *IAP) refreshJwt() error {
-	iap.Jwt.Exp = time.Now().Add(time.Hour).Unix()
-	iap.Jwt.Aud = oauthTokenURI
-	iap.Jwt.Iss = iap.SignerEmail
-	iap.Jwt.Iat = time.Now().Unix()
-	iap.Jwt.TargetAudience = iap.ClientID
+	iap.jwt.Exp = time.Now().Add(time.Hour).Unix()
+	iap.jwt.Aud = oauthTokenURI
+	iap.jwt.Iss = iap.signerEmail
+	iap.jwt.Iat = time.Now().Unix()
+	iap.jwt.TargetAudience = iap.clientID
 
-	claimSetJSON, err := json.Marshal(iap.Jwt)
+	claimSetJSON, err := json.Marshal(iap.jwt)
 	if err != nil {
 		return errors.Wrap(err, "failed to marshal claimset to JSON")
 	}
 
-	signJwtName := fmt.Sprintf("projects/-/serviceAccounts/%v", iap.SignerEmail)
+	signJwtName := fmt.Sprintf("projects/-/serviceAccounts/%v", iap.signerEmail)
 	var signJwtRequest iam.SignJwtRequest
 	signJwtRequest.Payload = string(claimSetJSON)
 
-	signedJwt, err := signJwt(iap.HttpClient, signJwtName, &signJwtRequest)
+	signedJwt, err := signJwt(iap.httpClient, signJwtName, &signJwtRequest)
 	if err != nil {
 		// already wrapped by signJwt
 		return err
 	}
 
-	iap.SignedJwt = signedJwt
+	iap.signedJwt = signedJwt
 	return nil
 }
 
@@ -139,7 +140,7 @@ func (iap *IAP) refreshJwt() error {
 // actually sent to the IAP-protected endpoint as auth
 func (iap *IAP) refreshOIDC() error {
 	data := url.Values{}
-	data.Set("assertion", iap.SignedJwt)
+	data.Set("assertion", iap.signedJwt)
 	data.Set("grant_type", jwtGrantType)
 
 	req, err := http.NewRequest("POST", oauthTokenURI, strings.NewReader(data.Encode()))
@@ -150,7 +151,7 @@ func (iap *IAP) refreshOIDC() error {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Content-Length", strconv.Itoa(len(data.Encode())))
 
-	resp, err := iap.HttpClient.Do(req)
+	resp, err := iap.httpClient.Do(req)
 	if err != nil {
 		return errors.Wrap(err, "OAuth Token HTTP request failed")
 	}
@@ -166,18 +167,14 @@ func (iap *IAP) refreshOIDC() error {
 		return errors.Wrap(err, "OAuth token unmarshal failed")
 	}
 
-	iap.OIDC = body.IDToken
+	iap.oidc = body.IDToken
 	return nil
 }
 
 // getSignerEmail finds the service account's email address, either via the
 // Default Credentials JSON blob, or via the metadata service
 func (iap *IAP) getSignerEmail() error {
-	if iap.SignerEmail != "" {
-		return nil
-	}
-
-	credentials, err := googleFindDefaultCredentials(iap.Context)
+	credentials, err := googleFindDefaultCredentials(iap.context)
 	if err != nil {
 		return errors.Wrap(err, "google.FindDefaultCredentials failed")
 	}
@@ -193,13 +190,13 @@ func (iap *IAP) getSignerEmail() error {
 		if err != nil {
 			return errors.Wrap(err, "metadata get failed")
 		}
-		iap.SignerEmail = signerEmail
+		iap.signerEmail = signerEmail
 	} else {
 		// We're local with JSON file - Get the email directly
 		if credJSON.Type != "service_account" {
 			return fmt.Errorf("IAP auth only works with service_accounts, got %v", credJSON.Type)
 		}
-		iap.SignerEmail = credJSON.ClientEmail
+		iap.signerEmail = credJSON.ClientEmail
 	}
 	return nil
 }
@@ -207,28 +204,30 @@ func (iap *IAP) getSignerEmail() error {
 // refresh is responsible for last-minute initialization, as well as auth
 // refreshing (if needed based on expiry)
 func (iap *IAP) refresh(ctx context.Context) error {
-	refreshLock.Lock()
-	defer refreshLock.Unlock()
+	iap.Lock()
+	defer iap.Unlock()
 
 	// Use the context from the http request that triggered the refresh for the
 	// ancillary requests
-	iap.Context = ctx
+	iap.context = ctx
 
 	// Initialize
-	if err := iap.getSignerEmail(); err != nil {
-		return errors.Wrap(err, "failed to get service account email")
+	if iap.signerEmail == "" {
+		if err := iap.getSignerEmail(); err != nil {
+			return errors.Wrap(err, "failed to get service account email")
+		}
 	}
 
-	if iap.HttpClient == nil {
-		httpClient, err := google.DefaultClient(iap.Context, iamScope)
+	if iap.httpClient == nil {
+		httpClient, err := google.DefaultClient(iap.context, iamScope)
 		if err != nil {
 			return errors.Wrap(err, "google.DefaultClient failed")
 		}
-		iap.HttpClient = httpClient
+		iap.httpClient = httpClient
 	}
 
 	// Refresh
-	if iap.Jwt.Exp-10 < time.Now().Unix() {
+	if iap.jwt.Exp-10 < time.Now().Unix() {
 		if err := iap.refreshJwt(); err != nil {
 			return errors.Wrap(err, "failed to get and sign JWT")
 		}
@@ -247,7 +246,7 @@ func (iap *IAP) RoundTrip(req *http.Request) (resp *http.Response, err error) {
 		return nil, errors.Wrap(err, "failed to refresh auth")
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %v", iap.OIDC))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %v", iap.oidc))
 
 	resp, err = iap.Transport.RoundTrip(req)
 	return resp, err
