@@ -6,8 +6,8 @@ Proxy
 
 See the `./examples` directory for how to use this.
 
-In summary, iapclient.NewIAP returns an http.RoundTripper that can be set as
-your http.Client's transport:
+In summary, `iapclient.NewIAP` returns an `http.RoundTripper` that can be set
+as your `http.Client`'s transport:
 ```
 iap, err := iapclient.NewIAP("client-id")
 if err != nil {
