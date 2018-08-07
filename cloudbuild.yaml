@@ -1,6 +1,6 @@
 steps:
   - name: 'gcr.io/cloud-builders/go'
-    args: ['get', './...']
+    args: ['get', '.']
     env: ['PROJECT_ROOT=go-iapclient']
   - name: 'gcr.io/cloud-builders/go'
     args: ['vet']
