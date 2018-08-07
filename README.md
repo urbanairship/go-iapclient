@@ -6,6 +6,13 @@ Proxy
 
 See the `./examples` directory for how to use this.
 
+Before using:
+1. Set permissions "appropriately"
+   - roles/iam.serviceAccountTokenCreator on the Service Account's own project
+   - roles/iap.httpsResourceAccessor on the target project where the
+     IAP-protected resource is
+1. Collect the target URI and Client ID
+
 In summary, `iapclient.NewIAP` returns an `http.RoundTripper` that can be set
 as your `http.Client`'s transport:
 ```
@@ -36,11 +43,6 @@ specifically the 'Authenticating from a service account' section.
 
 The high-level summary is
 
-1. Set permissions "appropriately"
-   - roles/iam.serviceAccountTokenCreator on the Service Account's own project
-   - roles/iap.httpsResourceAccessor on the target project where the
-     IAP-protected resource is
-1. Collect the target URI and Client ID
 1. Create a custom JWT with fields
    - `exp` - Epoch time 1 hour in the future
    - `aud` - `https://www.googleapis.com/oauth2/v4/token`
