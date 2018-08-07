@@ -12,4 +12,4 @@
 *.out
 
 # Vim stuff
-*.swp
+*.sw[op]
