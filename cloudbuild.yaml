@@ -9,5 +9,8 @@ steps:
     args: ['install', '.']
     env: ['PROJECT_ROOT=go-iapclient']
   - name: 'gcr.io/cloud-builders/go'
+    args: ['test', '-i', '.']
+    env: ['PROJECT_ROOT=go-iapclient']
+  - name: 'gcr.io/cloud-builders/go'
     args: ['test', '.']
     env: ['PROJECT_ROOT=go-iapclient']
