@@ -68,8 +68,6 @@ type IAP struct {
 	Transport   http.RoundTripper
 }
 
-var refreshLock sync.Mutex
-
 // Side-effect dependencies for masking in tests
 var googleFindDefaultCredentials = google.FindDefaultCredentials
 var metadataGet = metadata.Get

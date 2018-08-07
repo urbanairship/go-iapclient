@@ -13,9 +13,9 @@ import (
 )
 
 var (
-	clientID = kingpin.Flag("client-id", "OAuth Client ID").Required().String()
-	uri      = kingpin.Flag("uri", "URI to get").Required().String()
-	caFile   = kingpin.Flag("ca-file", "Custom CA PEM file").Required().ExistingFile()
+	cid    = kingpin.Flag("client-id", "OAuth Client ID").Required().String()
+	uri    = kingpin.Flag("uri", "URI to get").Required().String()
+	caFile = kingpin.Flag("ca-file", "Custom CA PEM file").Required().ExistingFile()
 )
 
 func getCustomTransport() (transport *http.Transport, err error) {
@@ -46,7 +46,7 @@ func main() {
 		log.Fatalf("Failed create HTTP request: %v", err)
 	}
 
-	iap, err := iapclient.NewIAP(*clientID)
+	iap, err := iapclient.NewIAP(*cid)
 	if err != nil {
 		log.Fatalf("Failed to create new IAP object: %v", err)
 	}
