@@ -17,7 +17,7 @@ In summary, `iapclient.NewIAP` returns an `http.RoundTripper` that can be set
 as your `http.Client`'s transport:
 
 ```
-iap, err := iapclient.NewIAP("client-id")
+iap, err := iapclient.NewIAP("client-id", nil)
 if err != nil {
     log.Fatalf("Failed to create new IAP object: %v", err)
 }
