@@ -22,9 +22,9 @@ type nopCloser struct {
 
 func (nopCloser) Close() error { return nil }
 
-type HttpClientMock struct{}
+type HTTPClientMock struct{}
 
-func (c *HttpClientMock) Do(req *http.Request) (*http.Response, error) {
+func (c *HTTPClientMock) Do(req *http.Request) (*http.Response, error) {
 	resp := &http.Response{}
 	switch req.URL.String() {
 	case "https://www.googleapis.com/oauth2/v4/token":
@@ -90,7 +90,7 @@ func metadataGetFailMock(path string) (string, error) {
 	return "", fmt.Errorf("Synthesized metadata.Get failure")
 }
 
-func signJwtMock(httpClient Doer, name string, request *iam.SignJwtRequest) (string, error) {
+func signJWTMock(httpClient Doer, name string, request *iam.SignJwtRequest) (string, error) {
 	return string(request.Payload), nil
 }
 
@@ -110,7 +110,7 @@ func TestRefreshWithAppDefault(t *testing.T) {
 	require := require.New(t)
 
 	iap, err := NewIAP("client-id", &Config{
-		HttpClient: &HttpClientMock{},
+		HTTPClient: &HTTPClientMock{},
 	})
 
 	require.Nil(err)
@@ -118,7 +118,7 @@ func TestRefreshWithAppDefault(t *testing.T) {
 
 	googleFindDefaultCredentials = googleFindDefaultCredentialsAppDefaultMock
 	metadataGet = metadataGetMock
-	signJwt = signJwtMock
+	signJWT = signJWTMock
 
 	iap.context = context.Background()
 
@@ -132,11 +132,11 @@ func TestRefreshWithAppDefault(t *testing.T) {
 	})
 
 	t.Run("refreshJwt", func(t *testing.T) {
-		assert.NotNil(iap.signedJwt)
+		assert.NotNil(iap.signedJWT)
 		// In testing context iap.SignedJwt is actually the claimSet that was
 		// sent to be signed
 		var cs claimSet
-		err = json.Unmarshal([]byte(iap.signedJwt), &cs)
+		err = json.Unmarshal([]byte(iap.signedJWT), &cs)
 		assert.Nil(err)
 
 		assert.Equal("https://www.googleapis.com/oauth2/v4/token", cs.Aud)
@@ -160,7 +160,7 @@ func TestRefreshWithServiceAccountJSON(t *testing.T) {
 	require := require.New(t)
 
 	iap, err := NewIAP("client-id", &Config{
-		HttpClient: &HttpClientMock{},
+		HTTPClient: &HTTPClientMock{},
 	})
 
 	require.Nil(err)
@@ -168,7 +168,7 @@ func TestRefreshWithServiceAccountJSON(t *testing.T) {
 
 	googleFindDefaultCredentials = googleFindDefaultCredentialsServiceAccountJSONMock
 	metadataGet = metadataGetMock
-	signJwt = signJwtMock
+	signJWT = signJWTMock
 
 	iap.context = context.Background()
 
@@ -182,10 +182,10 @@ func TestRefreshWithServiceAccountJSON(t *testing.T) {
 	})
 
 	t.Run("refreshJwt", func(t *testing.T) {
-		assert.NotNil(iap.signedJwt)
+		assert.NotNil(iap.signedJWT)
 		// In testing context iap.SignedJwt is actually the iam.SignJwtRequest.Payload
 		var cs claimSet
-		err = json.Unmarshal([]byte(iap.signedJwt), &cs)
+		err = json.Unmarshal([]byte(iap.signedJWT), &cs)
 		assert.Nil(err)
 
 		assert.Equal("https://www.googleapis.com/oauth2/v4/token", cs.Aud)
@@ -204,7 +204,7 @@ func TestRefreshWithAuthorizedUserJSON(t *testing.T) {
 	require := require.New(t)
 
 	iap, err := NewIAP("client-id", &Config{
-		HttpClient: &HttpClientMock{},
+		HTTPClient: &HTTPClientMock{},
 	})
 
 	require.Nil(err)
@@ -212,7 +212,7 @@ func TestRefreshWithAuthorizedUserJSON(t *testing.T) {
 
 	googleFindDefaultCredentials = googleFindDefaultCredentialsAuthorizedUserJSONMock
 	metadataGet = metadataGetMock
-	signJwt = signJwtMock
+	signJWT = signJWTMock
 
 	iap.context = context.Background()
 
@@ -227,7 +227,7 @@ func TestRefreshWithFailingMetadata(t *testing.T) {
 	require := require.New(t)
 
 	iap, err := NewIAP("client-id", &Config{
-		HttpClient: &HttpClientMock{},
+		HTTPClient: &HTTPClientMock{},
 	})
 
 	require.Nil(err)
@@ -235,7 +235,7 @@ func TestRefreshWithFailingMetadata(t *testing.T) {
 
 	googleFindDefaultCredentials = googleFindDefaultCredentialsAuthorizedUserJSONMock
 	metadataGet = metadataGetFailMock
-	signJwt = signJwtMock
+	signJWT = signJWTMock
 
 	iap.context = context.Background()
 
@@ -250,7 +250,7 @@ func TestRoundTrip(t *testing.T) {
 	require := require.New(t)
 
 	iap, err := NewIAP("client-id", &Config{
-		HttpClient: &HttpClientMock{},
+		HTTPClient: &HTTPClientMock{},
 		Transport:  &TransportMock{},
 	})
 
@@ -259,7 +259,7 @@ func TestRoundTrip(t *testing.T) {
 
 	googleFindDefaultCredentials = googleFindDefaultCredentialsAppDefaultMock
 	metadataGet = metadataGetMock
-	signJwt = signJwtMock
+	signJWT = signJWTMock
 
 	iap.context = context.Background()
 

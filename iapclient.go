@@ -61,7 +61,7 @@ type IAP struct {
 	clientID    string
 	signerEmail string
 	jwt         *claimSet
-	signedJwt   string
+	signedJWT   string
 	oidc        string
 	httpClient  Doer
 	context     context.Context
@@ -70,14 +70,14 @@ type IAP struct {
 
 // Config stores parameters optional for NewIAP
 type Config struct {
-	HttpClient Doer
+	HTTPClient Doer
 	Transport  http.RoundTripper
 }
 
 // Side-effect dependencies for masking in tests
 var googleFindDefaultCredentials = google.FindDefaultCredentials
 var metadataGet = metadata.Get
-var signJwt = signJwtReal
+var signJWT = signJWTReal
 
 // NewIAP creates a new IAP object to fetch and refresh IAP authentication
 func NewIAP(cid string, config *Config) (*IAP, error) {
@@ -92,8 +92,8 @@ func NewIAP(cid string, config *Config) (*IAP, error) {
 		if config.Transport != nil {
 			transport = config.Transport
 		}
-		if config.HttpClient != nil {
-			httpClient = config.HttpClient
+		if config.HTTPClient != nil {
+			httpClient = config.HTTPClient
 		}
 	}
 
@@ -107,7 +107,8 @@ func NewIAP(cid string, config *Config) (*IAP, error) {
 }
 
 // A wrapper to deal with upstream API call so we can skip this all during testing
-func signJwtReal(httpClient Doer, name string, request *iam.SignJwtRequest) (string, error) {
+// Note that this function is protected by the Lock in the refresh method
+func signJWTReal(httpClient Doer, name string, request *iam.SignJwtRequest) (string, error) {
 	client, ok := httpClient.(*http.Client)
 	if !ok {
 		return "", fmt.Errorf("unknown client type: %T", httpClient)
@@ -128,6 +129,7 @@ func signJwtReal(httpClient Doer, name string, request *iam.SignJwtRequest) (str
 // instead of signing it ourselves because a) we don't have the private key in
 // some cases (Application Default), and b) that requires a bunch more
 // libraries
+// Note that this method is protected by the Lock in the refresh method
 func (iap *IAP) refreshJwt() error {
 	iap.jwt.Exp = time.Now().Add(time.Hour).Unix()
 	iap.jwt.Aud = oauthTokenURI
@@ -140,26 +142,27 @@ func (iap *IAP) refreshJwt() error {
 		return errors.Wrap(err, "failed to marshal claimset to JSON")
 	}
 
-	signJwtName := fmt.Sprintf("projects/-/serviceAccounts/%v", iap.signerEmail)
-	var signJwtRequest iam.SignJwtRequest
-	signJwtRequest.Payload = string(claimSetJSON)
+	signJWTName := fmt.Sprintf("projects/-/serviceAccounts/%v", iap.signerEmail)
+	var signJWTRequest iam.SignJwtRequest
+	signJWTRequest.Payload = string(claimSetJSON)
 
-	signedJwt, err := signJwt(iap.httpClient, signJwtName, &signJwtRequest)
+	signedJWT, err := signJWT(iap.httpClient, signJWTName, &signJWTRequest)
 	if err != nil {
-		// already wrapped by signJwt
+		// already wrapped by signJWT
 		return err
 	}
 
-	iap.signedJwt = signedJwt
+	iap.signedJWT = signedJWT
 	return nil
 }
 
 // refreshOIDC is responsible for using our previously gotten JWT to talk to
 // the Google OAuth URI to get a OIDC bearer token. This token is the one
 // actually sent to the IAP-protected endpoint as auth
+// Note that this method is protected by the Lock in the refresh method
 func (iap *IAP) refreshOIDC() error {
 	data := url.Values{}
-	data.Set("assertion", iap.signedJwt)
+	data.Set("assertion", iap.signedJWT)
 	data.Set("grant_type", jwtGrantType)
 
 	req, err := http.NewRequest("POST", oauthTokenURI, strings.NewReader(data.Encode()))
@@ -192,6 +195,7 @@ func (iap *IAP) refreshOIDC() error {
 
 // getSignerEmail finds the service account's email address, either via the
 // Default Credentials JSON blob, or via the metadata service
+// Note that this method is protected by the Lock in the refresh method
 func (iap *IAP) getSignerEmail() error {
 	credentials, err := googleFindDefaultCredentials(iap.context)
 	if err != nil {

@@ -28,7 +28,6 @@ httpClient := &http.Client{
 
 req, err := http.NewRequest("GET", "some uri", nil)
 ...
-
 ```
 
 # Why
