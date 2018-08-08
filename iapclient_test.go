@@ -22,24 +22,13 @@ type nopCloser struct {
 
 func (nopCloser) Close() error { return nil }
 
-type HTTPClientMock struct{}
-
-func (c *HTTPClientMock) Do(req *http.Request) (*http.Response, error) {
-	resp := &http.Response{}
-	switch req.URL.String() {
-	case "https://www.googleapis.com/oauth2/v4/token":
-		resp.Body = nopCloser{bytes.NewBufferString("{\"id_token\": \"fake_id_token\"}")}
-	default:
-		return nil, fmt.Errorf("Unhandled testing URL: %v", req.URL)
-	}
-	return resp, nil
-}
-
 type TransportMock struct{}
 
 func (c *TransportMock) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp := &http.Response{}
 	switch req.URL.String() {
+	case "https://www.googleapis.com/oauth2/v4/token":
+		resp.Body = nopCloser{bytes.NewBufferString("{\"id_token\": \"fake_id_token\"}")}
 	case "http://localhost/roundtrip":
 		auth := req.Header.Get("Authorization")
 		resp.Body = nopCloser{bytes.NewBufferString(fmt.Sprintf("auth header: %v", auth))}
@@ -90,7 +79,7 @@ func metadataGetFailMock(path string) (string, error) {
 	return "", fmt.Errorf("Synthesized metadata.Get failure")
 }
 
-func signJWTMock(httpClient Doer, name string, request *iam.SignJwtRequest) (string, error) {
+func signJWTMock(httpClient *http.Client, name string, request *iam.SignJwtRequest) (string, error) {
 	return string(request.Payload), nil
 }
 
@@ -110,7 +99,7 @@ func TestRefreshWithAppDefault(t *testing.T) {
 	require := require.New(t)
 
 	iap, err := NewIAP("client-id", &Config{
-		HTTPClient: &HTTPClientMock{},
+		HTTPClient: &http.Client{Transport: &TransportMock{}},
 	})
 
 	require.Nil(err)
@@ -160,7 +149,7 @@ func TestRefreshWithServiceAccountJSON(t *testing.T) {
 	require := require.New(t)
 
 	iap, err := NewIAP("client-id", &Config{
-		HTTPClient: &HTTPClientMock{},
+		HTTPClient: &http.Client{Transport: &TransportMock{}},
 	})
 
 	require.Nil(err)
@@ -204,7 +193,7 @@ func TestRefreshWithAuthorizedUserJSON(t *testing.T) {
 	require := require.New(t)
 
 	iap, err := NewIAP("client-id", &Config{
-		HTTPClient: &HTTPClientMock{},
+		HTTPClient: &http.Client{Transport: &TransportMock{}},
 	})
 
 	require.Nil(err)
@@ -227,7 +216,7 @@ func TestRefreshWithFailingMetadata(t *testing.T) {
 	require := require.New(t)
 
 	iap, err := NewIAP("client-id", &Config{
-		HTTPClient: &HTTPClientMock{},
+		HTTPClient: &http.Client{Transport: &TransportMock{}},
 	})
 
 	require.Nil(err)
@@ -250,7 +239,7 @@ func TestRoundTrip(t *testing.T) {
 	require := require.New(t)
 
 	iap, err := NewIAP("client-id", &Config{
-		HTTPClient: &HTTPClientMock{},
+		HTTPClient: &http.Client{Transport: &TransportMock{}},
 		Transport:  &TransportMock{},
 	})
 

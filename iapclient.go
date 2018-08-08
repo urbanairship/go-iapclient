@@ -51,10 +51,6 @@ type credentialJSON struct {
 	ClientX509CertURL       string `json:"client_x509_cert_url"`
 }
 
-type Doer interface {
-	Do(*http.Request) (*http.Response, error)
-}
-
 // IAP struct to represent the latest retrieved auth details
 type IAP struct {
 	sync.Mutex
@@ -63,14 +59,14 @@ type IAP struct {
 	jwt         *claimSet
 	signedJWT   string
 	oidc        string
-	httpClient  Doer
+	httpClient  *http.Client
 	context     context.Context
 	transport   http.RoundTripper
 }
 
 // Config stores parameters optional for NewIAP
 type Config struct {
-	HTTPClient Doer
+	HTTPClient *http.Client
 	Transport  http.RoundTripper
 }
 
@@ -84,7 +80,7 @@ func NewIAP(cid string, config *Config) (*IAP, error) {
 	// We should only have to get this once
 
 	var transport http.RoundTripper
-	var httpClient Doer
+	var httpClient *http.Client
 
 	transport = &http.Transport{}
 	httpClient = nil
@@ -108,12 +104,8 @@ func NewIAP(cid string, config *Config) (*IAP, error) {
 
 // A wrapper to deal with upstream API call so we can skip this all during testing
 // Note that this function is protected by the Lock in the refresh method
-func signJWTReal(httpClient Doer, name string, request *iam.SignJwtRequest) (string, error) {
-	client, ok := httpClient.(*http.Client)
-	if !ok {
-		return "", fmt.Errorf("unknown client type: %T", httpClient)
-	}
-	svc, err := iam.New(client)
+func signJWTReal(httpClient *http.Client, name string, request *iam.SignJwtRequest) (string, error) {
+	svc, err := iam.New(httpClient)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to get IAM client")
 	}
