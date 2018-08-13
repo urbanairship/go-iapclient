@@ -1,5 +1,11 @@
 package main
 
+// This is an example of using go-iapclient for a purpose that is not usage by
+// a golang http.Client. It uses GetToken() to retrieve the token, then inserts
+// it into a curl commandline
+// Example usage:
+// go run iapwrap.go --client-id $CLIENT_ID -- -v -k https://$HOST
+
 import (
 	"context"
 	"fmt"
