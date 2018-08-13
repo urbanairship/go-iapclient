@@ -26,6 +26,8 @@ type TransportMock struct{}
 
 func (c *TransportMock) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp := &http.Response{}
+	resp.StatusCode = 200
+	resp.Status = "200 Success"
 	switch req.URL.String() {
 	case "https://www.googleapis.com/oauth2/v4/token":
 		resp.Body = nopCloser{bytes.NewBufferString("{\"id_token\": \"fake_id_token\"}")}
@@ -263,4 +265,27 @@ func TestRoundTrip(t *testing.T) {
 	assert.Nil(err)
 
 	assert.Equal("auth header: Bearer fake_id_token", string(body))
+}
+
+func TestGetToken(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
+	iap, err := NewIAP("client-id", &Config{
+		HTTPClient: &http.Client{Transport: &TransportMock{}},
+		Transport:  &TransportMock{},
+	})
+
+	require.Nil(err)
+	require.NotNil(iap)
+
+	googleFindDefaultCredentials = googleFindDefaultCredentialsAppDefaultMock
+	metadataGet = metadataGetMock
+	signJWT = signJWTMock
+
+	iap.context = context.Background()
+
+	resp, err := iap.GetToken(context.Background())
+	assert.Nil(err)
+	assert.Equal("fake_id_token", resp)
 }

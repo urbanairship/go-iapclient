@@ -25,7 +25,9 @@ const (
 )
 
 type oAuthTokenBody struct {
-	IDToken string `json:"id_token"`
+	IDToken          string `json:"id_token"`
+	Error            string `json:"error"`
+	ErrorDescription string `json:"error_description"`
 }
 
 // claimSet represents a JWT claimSet to represent all the fields for creating
@@ -181,6 +183,13 @@ func (iap *IAP) refreshOIDC() error {
 		return errors.Wrap(err, "OAuth token unmarshal failed")
 	}
 
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if body.Error == "invalid_scope" {
+			return fmt.Errorf("%v: invalid Client ID '%v'", resp.Status, iap.clientID)
+		}
+		return fmt.Errorf("%v: %v", resp.Status, body.ErrorDescription)
+	}
+
 	iap.oidc = body.IDToken
 	return nil
 }
@@ -265,4 +274,14 @@ func (iap *IAP) RoundTrip(req *http.Request) (resp *http.Response, err error) {
 
 	resp, err = iap.transport.RoundTrip(req)
 	return resp, err
+}
+
+// GetToken refreshes the token if necessary, and returns it
+func (iap *IAP) GetToken(ctx context.Context) (token string, err error) {
+
+	if err := iap.refresh(ctx); err != nil {
+		return "", errors.Wrap(err, "failed to refresh auth")
+	}
+
+	return iap.oidc, nil
 }
