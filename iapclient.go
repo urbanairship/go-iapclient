@@ -70,6 +70,11 @@ type IAP struct {
 type Config struct {
 	HTTPClient *http.Client
 	Transport  http.RoundTripper
+	// In the event that you happen to be using this in Cloud Builder, you'll
+	// need to override the email address used for signing the JWT as Cloud
+	// Builder's service account can't use the signJwt API endpoint for
+	// $REASONS (it's a 500 and Google says it's not supported)
+	SignerEmail string
 }
 
 // Side-effect dependencies for masking in tests
@@ -79,28 +84,20 @@ var signJWT = signJWTReal
 
 // NewIAP creates a new IAP object to fetch and refresh IAP authentication
 func NewIAP(cid string, config *Config) (*IAP, error) {
-	// We should only have to get this once
+	iap := IAP{
+		clientID:  cid,
+		jwt:       &claimSet{},
+		transport: &http.Transport{},
+	}
 
-	var transport http.RoundTripper
-	var httpClient *http.Client
-
-	transport = &http.Transport{}
-	httpClient = nil
 	if config != nil {
 		if config.Transport != nil {
-			transport = config.Transport
+			iap.transport = config.Transport
 		}
-		if config.HTTPClient != nil {
-			httpClient = config.HTTPClient
-		}
+		iap.httpClient = config.HTTPClient
+		iap.signerEmail = config.SignerEmail
 	}
 
-	iap := IAP{
-		clientID:   cid,
-		jwt:        &claimSet{},
-		transport:  transport,
-		httpClient: httpClient,
-	}
 	return &iap, nil
 }
 
