@@ -8,7 +8,8 @@ See the [./examples][3] directory for how to use this.
 
 Before using:
 1. Set permissions "appropriately"
-   - roles/iam.serviceAccountTokenCreator on the Service Account's own project
+   - roles/iam.serviceAccountTokenCreator on the Service Account's own Service
+     Account (yes, really - it's required for signBlob to work)
    - roles/iap.httpsResourceAccessor on the target project where the
      IAP-protected resource is
 1. Collect the target URI and Client ID
@@ -36,7 +37,6 @@ IAP-protected resources use a weird OAuth flow that's extremely fluid for
 web-browser based human clients, but quite awkward to authenticate to as a
 service account.
 
-
 # What this library does
 
 The upstream documentation for this process is [Authentication Howto][1]
@@ -51,7 +51,7 @@ The high-level summary is:
    - `target_audience` - IAP OAuth ClientID (must be gotten manually)
 1. Use the [projects.serviceAccounts.signJwt][2] method to have Google sign the
    JWT as your service account. This is done instead of using the private key
-   because Application Default AUthentication does not have the private key
+   because Application Default Authentication does not have the private key
    unless a JSON file is in use, and implementing both seemed silly.
 1. Do a POST to the OAuth Token URI (`https://www.googleapis.com/oauth2/v4/token`)
    Body should have the following fields:
