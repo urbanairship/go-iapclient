@@ -200,12 +200,7 @@ func (iap *IAP) getSignerEmail() error {
 		return errors.Wrap(err, "google.FindDefaultCredentials failed")
 	}
 
-	var credJSON credentialJSON
-	if err := json.Unmarshal(credentials.JSON, &credJSON); err != nil {
-		return errors.Wrap(err, "failed to unmarshal Google Default Credential JSON")
-	}
-
-	if credJSON == (credentialJSON{}) {
+	if credentials.JSON == nil {
 		// Looks like we're in GCE - Use the metadata service
 		signerEmail, err := metadataGet("instance/service-accounts/default/email")
 		if err != nil {
@@ -213,6 +208,10 @@ func (iap *IAP) getSignerEmail() error {
 		}
 		iap.signerEmail = signerEmail
 	} else {
+		var credJSON credentialJSON
+		if err := json.Unmarshal(credentials.JSON, &credJSON); err != nil {
+			return errors.Wrap(err, "failed to unmarshal Google Default Credential JSON")
+		}
 		// We're local with JSON file - Get the email directly
 		if credJSON.Type != "service_account" {
 			return fmt.Errorf("IAP auth only works with service_accounts, got %v", credJSON.Type)
