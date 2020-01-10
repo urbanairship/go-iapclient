@@ -42,7 +42,7 @@ func (c *TransportMock) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func googleFindDefaultCredentialsAppDefaultMock(ctx context.Context, scope ...string) (*google.Credentials, error) {
 	creds := google.Credentials{}
-	creds.JSON = []byte(`{}`)
+	creds.JSON = nil
 	return &creds, nil
 }
 
